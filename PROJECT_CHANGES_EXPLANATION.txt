@@ -1,0 +1,554 @@
+PROJECT CHANGES EXPLANATION
+===========================
+
+Project: VIBRO music application
+Purpose of this file: explain the code and features currently present in the project.
+Location: this file is outside both the frontend and backend folders.
+
+IMPORTANT NOTE ABOUT AUTHORSHIP
+------------------------------
+The source code does not contain a reliable record showing which lines were typed by
+an AI assistant and which lines were already in the project. Therefore, this report
+documents the implementation that is currently present in the workspace. It should
+not be treated as an exact Git history of assistant changes.
+
+The terminal-based Git comparison was not available while this report was created.
+For an exact before-and-after list later, run these commands from the project root:
+
+    git status --short
+    git diff -- frontend backend
+
+
+1. PROJECT STRUCTURE
+--------------------
+
+The project has two applications:
+
+    frontend/   React and Vite user interface
+    backend/    Express API, MongoDB models, authentication, and Cloudinary uploads
+
+The frontend communicates with the backend at:
+
+    http://localhost:8000/api/v1
+
+
+2. FRONTEND APPLICATION STARTUP
+-------------------------------
+
+File: frontend/src/main.jsx
+
+The React application is mounted into the browser page. The application uses the
+authentication context and player context so that login information and music
+playback are available throughout the application. The global MusicPlayer component
+is rendered so the player can remain available while the user changes pages.
+
+Main concepts used:
+
+    AuthProvider     stores the logged-in user and JWT token.
+    PlayerProvider   stores the selected song and playback queue.
+    App              defines the application routes.
+    MusicPlayer      displays the shared audio player.
+
+
+3. ROUTING AND PAGE ACCESS
+--------------------------
+
+File: frontend/src/App.jsx
+
+React Router routes were defined for public pages, authenticated pages, and
+artist-only pages.
+
+Public pages:
+
+    /login       Login.jsx
+    /register    Register.jsx
+
+Authenticated listener pages:
+
+    /home                    Home.jsx
+    /languages               Languages.jsx
+    /songs/:language         Songs.jsx
+    /song/:id                SongDetails.jsx
+    /favorites               Favorites.jsx
+    /profile                 Profile.jsx
+    /search                  SearchResults.jsx
+
+Artist-only pages:
+
+    /artist                   ArtistDashboard.jsx
+    /artist/add-song          AddSong.jsx
+    /artist/my-songs          MySongs.jsx
+
+The code pattern used for a protected page is:
+
+    <Route
+      path="/home"
+      element={
+        <ProtectedRoute>
+          <Home />
+        </ProtectedRoute>
+      }
+    />
+
+For an artist-only page, a role is passed to the guard:
+
+    <ProtectedRoute role="artist">
+      <ArtistDashboard />
+    </ProtectedRoute>
+
+Any unknown URL is redirected to /login using Navigate.
+
+
+4. LOGIN, REGISTRATION, AND AUTHENTICATION
+------------------------------------------
+
+Files:
+
+    frontend/src/context/AuthContext.jsx
+    frontend/src/pages/Login.jsx
+    frontend/src/pages/Register.jsx
+    frontend/src/components/ProtectedRoute.jsx
+    backend/src/controllers/user.controllers.js
+    backend/src/middleware/auth.middleware.js
+
+Registration:
+
+The registration page collects username, email, password, and role. The selected
+role can be user or artist. The form sends the values to POST /signup. After a
+successful registration, the user is sent to the login page.
+
+Login:
+
+The login page sends email and password to POST /login. The returned token and user
+data are saved in AuthContext and localStorage. Artists are sent to /artist; normal
+users are sent to /home.
+
+The important login decision is equivalent to:
+
+    login(result.user, result.token);
+
+    if (result.user.role === "artist") {
+      navigate("/artist");
+    } else {
+      navigate("/home");
+    }
+
+AuthContext behavior:
+
+    localStorage.setItem("token", token);
+    localStorage.setItem("user", JSON.stringify(user));
+
+When the application starts, the context reads these values again. This keeps the
+user logged in after a browser refresh. logout removes the saved values and clears
+the current user.
+
+ProtectedRoute behavior:
+
+    - If there is no logged-in user, redirect to /login.
+    - If a role is required and the user has another role, redirect to /home.
+    - Otherwise render the requested page.
+
+Backend authentication accepts a JWT from either:
+
+    Authorization: Bearer <token>
+
+or a cookie named token. The JWT contains the user ID and role.
+
+
+5. HOME PAGE AND LANGUAGE DISCOVERY
+-----------------------------------
+
+Files:
+
+    frontend/src/pages/Home.jsx
+    frontend/src/pages/Languages.jsx
+    frontend/src/components/LanguageCard.jsx
+
+Home page behavior:
+
+    - Shows a welcome area for the logged-in user.
+    - Provides a link to discover music by language.
+    - Shows featured language choices.
+    - Shows an artist upload call-to-action for artist accounts.
+
+Languages page behavior:
+
+Eight language options are displayed:
+
+    Hindi, Marathi, English, Punjabi,
+    Tamil, Telugu, Bengali, Kannada
+
+LanguageCard turns a language choice into a link like:
+
+    /songs/Hindi
+
+
+6. SONG LISTS AND SONG DETAILS
+------------------------------
+
+Files:
+
+    frontend/src/pages/Songs.jsx
+    frontend/src/pages/SongDetails.jsx
+    frontend/src/components/SongCard.jsx
+    frontend/src/services/api.js
+
+Songs page:
+
+Songs.jsx reads the language from the URL, calls getSongsByLanguage(language), and
+places the returned songs into the global player queue. It displays different UI
+states for loading, no songs found, and a populated song grid.
+
+The queue setup is conceptually:
+
+    const result = await getSongsByLanguage(language);
+    setQueue(result.songs);
+
+SongCard displays:
+
+    - Song artwork
+    - Song title
+    - Artist name
+    - Language
+    - A play button
+    - A favorite button
+
+The card can also be activated from the keyboard. On the favorites page it supports
+removing a song from favorites.
+
+SongDetails fetches one song by ID, displays its artwork and metadata, starts
+playback, and allows the user to add the song to favorites.
+
+Song response normalization was added in api.js so different backend field names
+can be used by the frontend:
+
+    title: song.title || song.songname
+    bannerUrl: song.bannerUrl || song.songbanner
+    language: song.language || song.genre
+
+This means the UI can use title, bannerUrl, and language even when the database
+returns songname, songbanner, and genre.
+
+
+7. GLOBAL MUSIC PLAYER
+----------------------
+
+Files:
+
+    frontend/src/context/PlayerContext.jsx
+    frontend/src/components/MusicPlayer.jsx
+
+PlayerContext stores these values:
+
+    currentSong   the song currently selected
+    queue         the ordered list of songs
+    isPlaying     whether playback should be active
+
+playSong(song, songs) does the following:
+
+    1. Replaces the queue when a new song list is provided.
+    2. Creates a one-song queue if there is no existing queue.
+    3. Sets currentSong to the selected song.
+    4. Sets isPlaying to true.
+
+The main code is:
+
+    const playSong = (song, songs = queue) => {
+      if (songs.length > 0) {
+        setQueue(songs);
+      } else if (queue.length === 0) {
+        setQueue([song]);
+      }
+      setCurrentSong(song);
+      setIsPlaying(true);
+    };
+
+Previous and next buttons find the current song index by comparing _id values.
+hasPrevious and hasNext disable navigation when the current song is at either end
+of the queue. stopSong changes isPlaying to false.
+
+MusicPlayer uses the HTML audio element and provides:
+
+    - Play and pause
+    - Previous and next song
+    - Ten-second rewind and forward
+    - Progress display and seeking
+    - Automatic next-song playback when a song ends
+    - Current artwork, title, and artist information
+
+
+8. NAVIGATION, SEARCH, AND PROFILE
+----------------------------------
+
+Files:
+
+    frontend/src/components/Navbar.jsx
+    frontend/src/components/SearchBar.jsx
+    frontend/src/pages/SearchResults.jsx
+    frontend/src/pages/Profile.jsx
+
+Navbar features:
+
+    - Navigation links to the main pages
+    - Profile access
+    - Logout action
+    - Search form submission
+    - Artist Studio link visible to artists
+
+SearchResults loads all songs using getSongs(), then performs case-insensitive
+matching against title, artist, and language. The matching logic is equivalent to:
+
+    songs.filter((song) =>
+      song.title.toLowerCase().includes(query) ||
+      song.artist.toLowerCase().includes(query) ||
+      song.language.toLowerCase().includes(query)
+    );
+
+An empty search query matches every song because every string contains an empty
+string. SearchBar.jsx exists, but the navbar currently performs the search directly.
+
+Profile displays the locally stored username, email, role, and an Active status.
+
+
+9. FAVORITES
+------------
+
+Files:
+
+    frontend/src/pages/Favorites.jsx
+    frontend/src/services/api.js
+    backend/src/controllers/favorite.controller.js
+    backend/src/routes/favorite.routes.js
+
+The frontend calls:
+
+    GET    /favorites
+    POST   /favorites/:songId
+    DELETE /favorites/:songId
+
+The backend stores song IDs in the logged-in user document. It prevents duplicate
+favorites, removes a selected favorite, and populates complete Music documents when
+favorites are requested.
+
+After a successful delete, Favorites.jsx removes the song from its local list so the
+page updates immediately without requiring a full page refresh.
+
+
+10. ARTIST DASHBOARD AND SONG UPLOAD
+------------------------------------
+
+Files:
+
+    frontend/src/pages/artist/ArtistDashboard.jsx
+    frontend/src/pages/artist/AddSong.jsx
+    frontend/src/pages/artist/MySongs.jsx
+    backend/src/controllers/artist.controller.js
+    backend/src/controllers/music.controller.js
+    backend/src/routes/artist.routes.js
+    backend/src/routes/music.routes.js
+
+ArtistDashboard gives artists links to upload songs and manage their own songs.
+
+AddSong collects:
+
+    - Title
+    - Artist name
+    - Language
+    - Category
+    - Audio file
+    - Artwork/banner file
+
+The form uses FormData because files cannot be sent as normal JSON. The API request
+is equivalent to:
+
+    fetch("http://localhost:8000/api/v1/addsong", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`
+      },
+      body: formData
+    });
+
+Content-Type is deliberately not manually set for FormData. The browser supplies
+the multipart boundary automatically.
+
+MySongs calls GET /artist/my-songs, displays songs uploaded by the logged-in artist,
+and deletes a selected song after confirmation.
+
+The delete request is:
+
+    DELETE /delete/:songId
+
+The backend checks that the current artist owns the song before deleting it.
+
+
+11. FRONTEND API SERVICE
+------------------------
+
+File: frontend/src/services/api.js
+
+The API service centralizes fetch calls. authHeaders() adds the bearer token to
+authenticated requests:
+
+    const authHeaders = (isFormData = false) => ({
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
+      Authorization: `Bearer ${getToken()}`,
+    });
+
+JSON requests receive Content-Type: application/json. FormData requests do not
+receive that header because the browser must generate it.
+
+Frontend API functions currently include:
+
+    registerUser(data)
+    loginUser(data)
+    getSongs()
+    getSongsByLanguage(language)
+    getSongById(id)
+    getFavorites()
+    addFavorite(songId)
+    removeFavorite(songId)
+    getMySongs()
+    deleteSong(songId)
+    uploadSong(formData)
+
+
+12. BACKEND SERVER AND DATABASE
+------------------------------
+
+Files:
+
+    backend/index.js
+    backend/src/db/index.js
+    backend/src/models/user.model.js
+    backend/src/models/music.model.js
+
+backend/index.js creates the Express server, enables JSON parsing, cookies, and
+CORS for the Vite frontend at http://localhost:5173. It mounts the user, music,
+favorite, and artist route groups, connects to MongoDB, and listens on the port in
+process.env.PORT.
+
+User model fields include:
+
+    username, email, password, role, favorites
+
+Music model fields include:
+
+    audio URL, banner URL, song name, artist, uploadedBy, album, genre, duration,
+    release date, description, and creation date
+
+
+13. BACKEND ROUTES AND CONTROLLERS
+----------------------------------
+
+User routes:
+
+    POST /api/v1/signup
+    POST /api/v1/login
+    POST /api/v1/logout
+
+Music routes:
+
+    POST  /api/v1/addsong
+    GET   /api/v1/getsongs
+    GET   /api/v1/getsongs/language/:language
+    GET   /api/v1/getsong/:id
+    DELETE /api/v1/delete/:id
+    PATCH /api/v1/update/:id
+
+Artist route:
+
+    GET /api/v1/artist/my-songs
+
+Favorite routes:
+
+    GET    /api/v1/favorites
+    POST   /api/v1/favorites/:songId
+    DELETE /api/v1/favorites/:songId
+
+The signup controller validates required values, rejects duplicate usernames or
+emails, checks password length, creates a user, and returns a JWT. Login looks up a
+user by email and returns a JWT. Logout clears the token cookie.
+
+The music controller creates a Music document using uploaded Cloudinary URLs and
+artist metadata. Language filtering is case-insensitive. Artist delete and update
+operations are protected by authentication and artist role checks.
+
+
+14. CLOUDINARY FILE UPLOADS
+---------------------------
+
+Files:
+
+    backend/src/service/cloudinary.js
+    backend/src/routes/music.routes.js
+
+Multer uses memory storage to receive the audio and banner files. The files are
+passed to Cloudinary through upload_stream. The resulting Cloudinary URLs are saved
+in the Music document and later returned to the frontend for playback and artwork.
+
+
+15. KNOWN ISSUES FOUND IN THE CURRENT CODE
+------------------------------------------
+
+These are existing implementation mismatches or risks visible in the current
+source and should be checked before presenting the application as complete.
+
+1. Song detail endpoint mismatch:
+
+   frontend/src/services/api.js calls GET /music/:id, while the backend route is
+   GET /getsong/:id. SongDetails may fail until one of these paths is changed to
+   match the other.
+
+2. Song cards do not currently link to details:
+
+   SongCard starts playback, but it does not naturally navigate to /song/:id.
+
+3. Update upload mismatch:
+
+   The update route uses upload.single("url"), while the controller expects files
+   in req.files.url and req.files.songbanner. The update flow may need alignment.
+
+4. Password security:
+
+   The login controller checks that the email exists but does not appear to compare
+   the submitted password. Passwords are also stored directly rather than hashed.
+   This should be fixed before production use.
+
+5. Error handling:
+
+   There is no central Express error-handling middleware, so some asynchronous
+   controller failures may not return consistent error responses.
+
+6. SearchBar component:
+
+   SearchBar.jsx is present but empty and is not currently used because search is
+   implemented inside Navbar.jsx.
+
+7. Documentation:
+
+   frontend/README.md is still close to the default Vite README and does not fully
+   describe this music application.
+
+
+16. SHORT SUMMARY OF THE IMPLEMENTED FEATURES
+----------------------------------------------
+
+The current project implements:
+
+    - React/Vite frontend
+    - Express backend
+    - MongoDB user and music storage
+    - JWT login and role-based route protection
+    - User and artist registration
+    - Music browsing by language
+    - Song search
+    - Song details
+    - Favorites management
+    - Shared queue-based music player
+    - Artist song upload with Cloudinary
+    - Artist-owned song listing and deletion
+    - Profile and navigation pages
+
+This report was created at the project root so it is outside both application
+folders, as requested.
